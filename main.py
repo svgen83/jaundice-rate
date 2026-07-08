@@ -2,8 +2,10 @@ import aiohttp
 import asyncio
 import pymorphy3
 from adapters.inosmi_ru import sanitize
-from text_tools import split_by_words, calculate_jaundice_rate
+from text_tools import split_by_words, calculate_jaundice_rate, load_charged_words
 
+
+morph = pymorphy3.MorphAnalyzer()
 
 async def fetch(session, url):
     async with session.get(url) as response:
@@ -12,14 +14,21 @@ async def fetch(session, url):
 
 
 async def main():
+
+    charged_words = load_charged_words("charged_dict")
+    print(f"Загружено {len(charged_words)} заряженных слов.")
+
     async with aiohttp.ClientSession() as session:
         #html = await fetch(session, 'http://example.com')
         html = await fetch(session, 'https://inosmi.ru/20260629/ormuz-279091044.html')
         html_sanitized = sanitize(html)
         print(html_sanitized)
         article_words = split_by_words(morph, html_sanitized)
-        rank = calculate_jaundice_rate(article_words, ['пролив', 'юридический'])
-        print(rank)
 
-morph = pymorphy3.MorphAnalyzer()
+        total_words = len(article_words)
+        print(f"Всего слов в статье: {total_words}")
+        rank = calculate_jaundice_rate(article_words, charged_words)
+        print(f"Рейтинг желтушности: {rank}%")
+
+
 asyncio.run(main())

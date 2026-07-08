@@ -1,5 +1,7 @@
-import pymorphy2
+import pymorphy3
 import string
+
+from pathlib import Path
 
 
 def _clean_word(word):
@@ -46,3 +48,21 @@ def calculate_jaundice_rate(article_words, charged_words):
 def test_calculate_jaundice_rate():
     assert -0.01 < calculate_jaundice_rate([], []) < 0.01
     assert 33.0 < calculate_jaundice_rate(['все', 'аутсайдер', 'побег'], ['аутсайдер', 'банкротство']) < 34.0
+
+
+def load_charged_words(folder_path):
+    charged = set()
+    folder = Path(folder_path)
+    if not folder.exists():
+        print(f"Предупреждение: папка {folder_path} не найдена. Словарь пуст.")
+        return charged
+
+    for file_path in folder.glob("*.txt"):
+        with open(file_path, 'r', encoding='utf-8') as word_set:
+            for line in word_set:
+                # Разбиваем строку по пробелам и удаляем лишние пробелы
+                words = line.strip().split()
+                for word in words:
+                    if word:
+                        charged.add(word.lower())
+    return charged
