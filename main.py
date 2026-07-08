@@ -1,5 +1,5 @@
 import aiohttp
-import asyncio
+import anyio
 import pymorphy3
 from adapters.inosmi_ru import sanitize
 from operator import itemgetter
@@ -22,25 +22,25 @@ async def fetch(session, url):
         return await response.text()
 
 
-async def process_article(session, url, morph, charged_words):
+async def process_article(session, url, morph, charged_words, results):
     try:
         html = await fetch(session, url)
         html_sanitized = sanitize(html)
         article_words = split_by_words(morph, html_sanitized)
         total_words = len(article_words)
         rating = calculate_jaundice_rate(article_words, charged_words)
-        return {
+        results.append({
             "url": url,
             "total_words": total_words,
             "rating": rating,
-        }
+        })
     except Exception as e:
-        return {
+        results.append({
             "url": url,
             "error": str(e),
             "total_words": 0,
             "rating": 0.0,
-        }
+        })
 
 def sort_by_rating(results):
 
@@ -50,14 +50,14 @@ def sort_by_rating(results):
 async def main():
     charged_words = load_charged_words("charged_dict")
     print(f"Загружено {len(charged_words)} заряженных слов.\n")
+    results = []
 
     async with aiohttp.ClientSession() as session:
-        tasks = []
-        for url in TEST_ARTICLES:
-            task = process_article(session, url, morph, charged_words)
-            tasks.append(task)
-
-        results = await asyncio.gather(*tasks)
+        # Создаём группу задач
+        async with anyio.create_task_group() as tg:
+            for url in TEST_ARTICLES:
+                # Запускаем задачу, передаём ей список results
+                tg.start_soon(process_article, session, url, morph, charged_words, results)
 
     sorted_results = sort_by_rating(results)
 
@@ -72,4 +72,5 @@ async def main():
     print("-" * 80)
 
 
-asyncio.run(main())
+if __name__ == "__main__":
+    anyio.run(main)
