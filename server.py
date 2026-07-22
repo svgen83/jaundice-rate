@@ -1,24 +1,30 @@
 import asyncio
-import aiohttp
-from aiohttp import web
-from functools import partial
-import pymorphy3
-import async_timeout
+import contextlib
 import logging
 import time
-import contextlib
 
-from adapters.inosmi_ru import sanitize, ArticleNotFound
-from text_tools import split_by_words, calculate_jaundice_rate
-from text_tools import load_charged_words
+import aiohttp
+import async_timeout
+import pymorphy3
+from aiohttp import web
+from functools import partial
+
+from adapters.inosmi_ru import ArticleNotFound, sanitize
+from text_tools import (calculate_jaundice_rate,
+                        load_charged_words,
+                        split_by_words)
+
 
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s')
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
-# Константа: максимальное количество URL в одном запросе
+
 MAX_URLS = 10
+TIMEOUT_SECONDS = 5.0
+
 
 @contextlib.contextmanager
 def timer(name):
@@ -27,15 +33,16 @@ def timer(name):
     elapsed = time.monotonic() - start
     logger.info(f"{name} закончен за {elapsed:.2f} сек")
 
+
 async def fetch(session, url):
     async with session.get(url) as response:
         response.raise_for_status()
         return await response.text()
 
+
 async def process_url(session, url, morph, charged_words):
-    timeout_seconds = 5.0
     try:
-        async with async_timeout.timeout(timeout_seconds):
+        async with async_timeout.timeout(TIMEOUT_SECONDS):
             html = await fetch(session, url)
 
         with timer(f"Анализ статьи {url}"):
@@ -57,7 +64,7 @@ async def process_url(session, url, morph, charged_words):
             "status": "TIMEOUT",
             "score": None,
             "words_count": None,
-            "error_detail": f"Timeout after {timeout_seconds}s"
+            "error_detail": f"Timeout after {TIMEOUT_SECONDS}s"
         }
     except aiohttp.ClientError as e:
         return {
@@ -84,27 +91,43 @@ async def process_url(session, url, morph, charged_words):
             "error_detail": str(e)
         }
 
+
 async def handle_analyze(request, morph, charged_words):
     urls_param = request.query.get('urls')
     if urls_param is None:
-        return web.json_response({'error': 'Missing "urls" parameter'}, status=400)
+        return web.json_response(
+            {'error': 'Missing "urls" parameter'},
+            status=400
+        )
 
-    url_list = [url.strip() for url in urls_param.split(',') if url.strip()]
+    url_list = [
+        url.strip() for url in urls_param.split(',') if url.strip()]
     if not url_list:
-        return web.json_response({'error': 'No valid URLs provided'}, status=400)
+        return web.json_response(
+            {'error': 'No valid URLs provided'},
+            status=400
+        )
 
-    # Проверка на превышение лимита
     if len(url_list) > MAX_URLS:
         return web.json_response(
-            {'error': f'too many urls in request, should be {MAX_URLS} or less'},
+            {'error': f'''too many urls in request,
+                          should be {MAX_URLS} or less'''},
             status=400
         )
 
     async with aiohttp.ClientSession() as session:
-        tasks = [process_url(session, url, morph, charged_words) for url in url_list]
-        results = await asyncio.gather(*tasks)
+        coros = [
+            process_url(session, url, morph, charged_words)
+            for url in url_list
+        ]
+        done, pending = await asyncio.wait(
+            coros,
+            return_when=asyncio.ALL_COMPLETED
+        )
+        results = [task.result() for task in done]
 
     return web.json_response(results)
+
 
 def main():
     morph = pymorphy3.MorphAnalyzer()
@@ -116,6 +139,7 @@ def main():
     app.router.add_get('/', handler)
 
     web.run_app(app, host='127.0.0.1', port=8080)
+
 
 if __name__ == '__main__':
     main()

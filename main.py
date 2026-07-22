@@ -3,18 +3,28 @@ import anyio
 import asyncio
 import pymorphy3
 import async_timeout
+import logging
+from enum import Enum
 
 from adapters.inosmi_ru import sanitize, ArticleNotFound
-from adapters.exceptions import ArticleNotFound
-from text_tools import split_by_words, calculate_jaundice_rate, load_charged_words
-from enum import Enum
+from text_tools import (split_by_words,
+                        calculate_jaundice_rate,
+                        load_charged_words)
+
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(name)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 
 class ProcessingStatus(Enum):
     OK = 'OK'
     FETCH_ERROR = 'FETCH_ERROR'
-    PARSING_ERROR = 'PARSING_ERROR' 
+    PARSING_ERROR = 'PARSING_ERROR'
     TIMEOUT = 'TIMEOUT'
+
 
 TEST_ARTICLES = [
     'https://inosmi.ru/20260629/ormuz-279091044.html',
@@ -37,10 +47,12 @@ async def process_article(session, url, morph, charged_words, results):
     try:
         async with async_timeout.timeout(timeout_seconds):
             html = await fetch(session, url)
+
         html_sanitized = sanitize(html)
-        article_words = split_by_words(morph, html_sanitized)
+        article_words = await split_by_words(morph, html_sanitized)
         total_words = len(article_words)
         rating = calculate_jaundice_rate(article_words, charged_words)
+
         results.append({
             "url": url,
             "status": ProcessingStatus.OK,
@@ -69,7 +81,9 @@ async def process_article(session, url, morph, charged_words, results):
             "status": ProcessingStatus.PARSING_ERROR,
             "total_words": None,
             "rating": None,
-            "error_detail": str(e) if str(e) else "Article structure not found",
+            "error_detail": (str(e)
+                             if str(e)
+                             else "Article structure not found"),
         })
     except Exception as e:
         results.append({
@@ -80,6 +94,7 @@ async def process_article(session, url, morph, charged_words, results):
             "error_detail": str(e),
         })
 
+
 def _sort_key(item):
     rating = item.get('rating')
     if rating is None:
@@ -87,43 +102,57 @@ def _sort_key(item):
     else:
         return (0, -rating)
 
+
 def sort_by_rating(results):
     return sorted(results, key=_sort_key)
 
+
 async def main():
     charged_words = load_charged_words("charged_dict")
-    print(f"Загружено {len(charged_words)} заряженных слов.\n")
+    logger.info(f"Загружено {len(charged_words)} заряженных слов.")
 
     results = []
     async with aiohttp.ClientSession() as session:
         async with anyio.create_task_group() as tg:
             for url in TEST_ARTICLES:
-                tg.start_soon(process_article, session, url, morph, charged_words, results)
+                tg.start_soon(process_article, session,
+                              url, morph,
+                              charged_words, results)
 
     sorted_results = sort_by_rating(results)
 
-    print("Сравнение статей по рейтингу желтушности:")
-    print("-" * 80)
+    logger.info("Сравнение статей по рейтингу желтушности:")
     for idx, res in enumerate(sorted_results, start=1):
         status = res['status']
         if status == ProcessingStatus.OK:
-            print(f"{idx}. {res['url']} -> Статус: OK")
-            print(f"   Слов: {res['total_words']}, Рейтинг: {res['rating']}%")
+            logger.info(
+                f"{idx}. {res['url']} -> Статус: OK, "
+                f"Слов: {res['total_words']}, Рейтинг: {res['rating']}%"
+            )
         elif status == ProcessingStatus.FETCH_ERROR:
-            print(f"{idx}. {res['url']} -> Статус: FETCH_ERROR")
-            if 'error_detail' in res:
-                print(f"   Ошибка: {res['error_detail']}")
+            logger.info(
+                f"{idx}. {res['url']} -> Статус: FETCH_ERROR"
+                f"""{' - ' + res['error_detail']
+                if 'error_detail' in res else ''}"""
+            )
         elif status == ProcessingStatus.PARSING_ERROR:
-            print(f"{idx}. {res['url']} -> Статус: PARSING_ERROR")
-            if 'error_detail' in res:
-                print(f"   Ошибка: {res['error_detail']}")
+            logger.info(
+                f"""
+                {idx}. {res['url']} -> Статус: PARSING_ERROR"""
+                f"""
+                 {' - ' + res['error_detail']
+                 if 'error_detail' in res else ''}"""
+            )
         elif status == ProcessingStatus.TIMEOUT:
-            print(f"{idx}. {res['url']} -> Статус: TIMEOUT")
-            if 'error_detail' in res:
-                print(f"   Ошибка: {res['error_detail']}")
+            logger.info(
+                f"{idx}. {res['url']} -> Статус: TIMEOUT"
+                f"""
+                 {' - ' + res['error_detail']
+                 if 'error_detail' in res else ''}"""
+            )
         else:
-            print(f"{idx}. {res['url']} -> Статус: {status.value}")
-    print("-" * 80)
+            logger.info(
+                f"{idx}. {res['url']} -> Статус: {status.value}")
 
 if __name__ == "__main__":
     anyio.run(main)
